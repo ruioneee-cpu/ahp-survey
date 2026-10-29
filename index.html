@@ -114,7 +114,7 @@ td.r,th.r{text-align:right}
 <div class="toast" id="toast" hidden></div>
 <script>
 /* ===== 설정: 구글 Apps Script 웹 앱 주소를 따옴표 안에 붙여 넣으세요 ===== */
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxvMCtrUi5PIbFUDGjdtNMYwBW20rqwIwCPaWgiq08Xa2maquFS79-Pu3ZHsdrYLXT9TQ/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz2dGsSuHIAsEJyXjzmmxRrbYLkel6TeRyEumsfD5iGGklPmOzkaY1NqVafrtgGboAPJA/exec";
 /* ===== 문항 구성: 항목 이름이나 개수를 바꾸면 화면과 계산이 함께 바뀝니다 (Code.gs의 GROUPS도 똑같이 맞춰 주세요) ===== */
 const GROUPS = [
   {id:"P", title:"부문 간 비교", parent:"평가체계 전체", q:"지속가능한 농가 평가에서, 두 부문 중 어느 쪽이 얼마나 더 중요합니까?", items:["환경","사회","경제"]},
@@ -181,12 +181,13 @@ function renderSurvey(){
 function introView(){
   const c=el("div",{class:"card"});
   c.append(
-    el("p",{},"본 설문은 농산물 소득조사와 토양검정정보를 바탕으로 개별 농가의 환경·경제·사회 부문 가치를 평가하기 위해, 각 평가 요소의 상대적 중요도(가중치)를 전문가 판단으로 산출하는 AHP(계층분석법) 조사입니다."),
+    el("p",{},"본 설문은 개별 농가의 환경·경제·사회 부문 가치를 평가하기 위해, 각 평가 요소의 상대적 중요도(가중치)를 전문가 판단으로 산출하는 AHP(계층분석법) 조사입니다."),
     el("p",{class:"muted small"},"두 요소를 짝지어 어느 쪽이 얼마나 더 중요한지 고르시면 됩니다. 비교 묶음은 4개, 문항은 모두 15개이며 약 10분이 걸립니다. 응답이 서로 모순되면 화면에서 바로 알려드립니다."),
   );
   const key=el("div",{class:"field"}, el("span",{class:"eyebrow"},"척도 읽는 법"),
     el("div",{class:"scalekey"}, ["1 동등","3 약간 더","5 상당히 더","7 매우 더","9 절대적으로 더"].map(t=>el("div",{},t))),
-    el("p",{class:"muted small"},"2·4·6·8은 그 사이 값입니다. 가운데(1)에서 더 중요한 쪽으로 갈수록 숫자가 커집니다."));
+    el("p",{class:"muted small"},"2·4·6·8은 그 사이 값입니다. 가운데(1)에서 더 중요한 쪽으로 갈수록 숫자가 커집니다."),
+    el("p",{class:"small"},el("b",{},"숫자는 '몇 배'라는 뜻이라 서로 곱해집니다. "),"A가 B보다 3, B가 C보다 3이면 A는 C보다 9가 되어야 합니다. 1위와 2위처럼 이웃한 순위끼리는 작은 숫자를 쓰시면 응답이 서로 잘 맞습니다."));
   const name=el("input",{type:"text",id:"in-name",value:S.info.name,autocomplete:"name",oninput:e=>{S.info.name=e.target.value;saveDraft();check();}});
   const org=el("input",{type:"text",id:"in-org",value:S.info.org,oninput:e=>{S.info.org=e.target.value;saveDraft();}});
   const seg=el("div",{class:"seg",role:"group","aria-label":"소속 구분"}, ["산업계","학계","연구기관","공공·행정","기타"].map(v=>el("button",{type:"button","aria-pressed":String(S.info.sector===v),onclick:()=>{S.info.sector=v;saveDraft();renderSurvey();}},v)));
@@ -216,34 +217,54 @@ function groupView(g){
       el("button",{type:"button","aria-label":`${g.items[idx]} 위로`,disabled:pos===0,onclick:()=>{const r=gs.rank;[r[pos-1],r[pos]]=[r[pos],r[pos-1]];saveDraft();renderSurvey();}},"↑"),
       el("button",{type:"button","aria-label":`${g.items[idx]} 아래로`,disabled:pos===n-1,onclick:()=>{const r=gs.rank;[r[pos+1],r[pos]]=[r[pos],r[pos+1]];saveDraft();renderSurvey();}},"↓")));
   });
-  c.append(el("div",{class:"rank"}, el("p",{class:"small"},el("b",{},"먼저 중요한 순서대로 정렬해 주세요. "),el("span",{class:"muted"},"순서를 먼저 정하면 아래 비교에서 모순이 줄어듭니다.")), ol));
+  c.append(el("div",{class:"rank"}, el("p",{class:"small"},el("b",{},"먼저 중요한 순서대로 정렬해 주세요. "),el("span",{class:"muted"},"아래 비교는 이 순서대로, 순위가 높은 요소를 왼쪽에 두고 나옵니다.")), ol));
 
   c.append(el("p",{style:"font-weight:500"},g.q));
   const res=groupResult(g,gs);
   const bad = res && res.CR>0.1 ? worstPair(res.A,res.w) : null;
   const rankPos = {}; gs.rank.forEach((idx,p)=>rankPos[idx]=p);
 
-  for(const [i,j] of pairs(n)){
+  // 순위대로 정렬: 이웃한 순위끼리 먼저, 먼 순위는 나중에. 왼쪽에는 늘 순위가 높은 요소를 둔다.
+  const order = pairs(n).map(([i,j])=>{ const flip=rankPos[i]>rankPos[j]; return {i,j,flip,L:flip?j:i,R:flip?i:j,dist:Math.abs(rankPos[i]-rankPos[j]),pos:Math.min(rankPos[i],rankPos[j])}; })
+    .sort((a,b)=>a.dist-b.dist||a.pos-b.pos);
+  const ratio=(x,y)=>{ const a=Math.min(x,y), b=Math.max(x,y), s=gs.s[a+"-"+b]; if(!s) return null; const v=sToA(s); return x===a?v:1/v; };
+
+  for(const q of order){
+    const {i,j,flip,L,R}=q;
     const key=i+"-"+j, cur=gs.s[key];
+    const dcur = cur ? (flip?18-cur:cur) : null;
+    const setK = k => { gs.s[key]= flip?18-k:k; saveDraft(); renderSurvey(); };
     const isBad = bad && bad.i===i && bad.j===j;
-    const scale=el("div",{class:"scale",role:"radiogroup","aria-label":`${g.items[i]} 대 ${g.items[j]}`});
+    const scale=el("div",{class:"scale",role:"radiogroup","aria-label":`${g.items[L]} 대 ${g.items[R]}`});
     for(let k=1;k<=17;k++){
       const v = k<=9 ? 10-k : k-8;
-      scale.append(el("button",{type:"button",class:(v%2?"odd ":"")+(k===9?"mid":""),"aria-pressed":String(cur===k),
-        "aria-label": v===1?"동등":(k<9?`${g.items[i]} ${v}`:`${g.items[j]} ${v}`),
-        onclick:()=>{ gs.s[key]=k; saveDraft(); renderSurvey(); }}, v));
+      scale.append(el("button",{type:"button",class:(v%2?"odd ":"")+(k===9?"mid":""),"aria-pressed":String(dcur===k),
+        "aria-label": v===1?"동등":(k<9?`${g.items[L]} ${v}`:`${g.items[R]} ${v}`), onclick:()=>setK(k)}, v));
     }
     let read="";
-    if(cur){ const v=cur<=9?10-cur:cur-8; read = v===1 ? "두 요소가 동등하게 중요" : `${cur<9?g.items[i]:g.items[j]}이(가) ${INTENSITY[v]} 중요 (${v})`; }
-    const contra = cur && ((cur<9 && rankPos[i]>rankPos[j]) || (cur>9 && rankPos[i]<rankPos[j]));
+    if(dcur){ const v=dcur<=9?10-dcur:dcur-8; read = v===1 ? "두 요소가 동등하게 중요" : `${dcur<9?g.items[L]:g.items[R]}이(가) ${INTENSITY[v]} 중요 (${v})`; }
     const p=el("div",{class:"pair"+(isBad?" bad":"")},
-      el("div",{class:"ends"},el("span",{},`← ${g.items[i]}`),el("span",{},`${g.items[j]} →`)),
+      el("div",{class:"ends"},el("span",{},`← ${g.items[L]}`),el("span",{},`${g.items[R]} →`)),
       scale, el("div",{class:"readout"},read));
-    if(contra) p.append(el("div",{class:"hint"},"위에서 정한 순위와 반대 방향입니다. 의도하신 것이 맞는지 확인해 주세요."));
-    if(isBad){
-      const ts=aToS(bad.target), tv=ts<=9?10-ts:ts-8;
-      const sug = tv===1 ? "두 요소를 비슷하게" : `${ts<9?g.items[i]:g.items[j]} 쪽을 ${tv} 정도로`;
-      p.append(el("div",{class:"hint"},`이 문항이 다른 응답들과 가장 어긋납니다. 나머지 응답과 맞추면 ${sug} 판단하신 셈입니다. 다시 검토해 주세요.`));
+    if(dcur && dcur>9) p.append(el("div",{class:"hint"},"위에서 정한 순위와 반대 방향입니다. 의도하신 것이 맞는지 확인해 주세요."));
+
+    // 다른 문항의 응답으로 본 이 비교의 '자연스러운' 값
+    const others=[...Array(n).keys()].filter(k=>k!==i&&k!==j);
+    const chain=others.map(k=>{ const a=ratio(L,k), b=ratio(k,R); return a&&b?a*b:null; }).filter(x=>x);
+    const imp = chain.length===others.length ? Math.exp(chain.reduce((acc,x)=>acc+Math.log(x),0)/chain.length) : null;
+    if(imp){
+      const ts=aToS(imp), tv=ts<=9?10-ts:ts-8;
+      const impTxt = tv===1 ? "두 요소가 비슷하게 중요" : `${ts<9?g.items[L]:g.items[R]}이(가) ${tv} 정도 더 중요`;
+      const lab = tv===1 ? "동등(1)" : `${ts<9?g.items[L]:g.items[R]} ${tv}`;
+      const fixBtn = el("div",{},el("button",{type:"button",class:"btn ghost",style:"padding:4px 12px;font-size:.85rem",onclick:()=>setK(ts)},`${lab}(으)로 정하기`));
+      if(imp>9.5 && q.dist>=2){
+        p.append(el("div",{class:"hint"},`앞의 응답대로라면 ${g.items[L]}이(가) ${g.items[R]}보다 약 ${Math.round(imp)}배 중요해야 하는데, 척도는 9까지라 맞출 수 없어요. 위쪽 이웃한 순위끼리의 비교 숫자를 조금 줄여 주세요.`));
+      } else if(isBad){
+        const flipDir = (dcur<9 && ts>9) || (dcur>9 && ts<9);
+        p.append(el("div",{class:"hint"},`다른 문항의 응답대로라면 ${impTxt}해야 자연스럽습니다. ${flipDir?"지금은 방향이 반대로 선택되어 있어요.":"지금 선택과 정도 차이가 커요."}`), fixBtn);
+      } else if(q.dist>=2 && !cur){
+        p.append(el("div",{class:"readout"},`참고: 위의 응답대로라면 ${impTxt}합니다.`), fixBtn);
+      }
     }
     c.append(p);
   }
@@ -254,7 +275,7 @@ function groupView(g){
   if(!res) status=el("div",{class:"status wait"},`${answered} / ${total} 문항 응답`);
   else if(res.CR<=0.1) status=el("div",{class:"status ok"},el("span",{},el("b",{},"일관성 양호 "),el("span",{class:"num"},`CR ${fmt(res.CR)}`)),el("span",{class:"small muted"},"응답들이 서로 잘 맞습니다."));
   else status=el("div",{class:"status bad"},el("span",{},el("b",{},"일관성 부족 "),el("span",{class:"num"},`CR ${fmt(res.CR)} (기준 0.1 이하)`)),
-    el("span",{class:"small"},"예를 들어 A가 B보다, B가 C보다 중요하다고 하셨다면 A는 C보다 더 중요해야 합니다. 표시된 문항을 다시 확인해 주세요."));
+    el("span",{class:"small"},"예를 들어 A가 B보다, B가 C보다 중요하다고 하셨다면 A는 C보다 더 중요해야 합니다. 표시된 문항을 바꾸거나, 다른 문항을 고쳐도 됩니다."));
   c.append(status);
 
   const back=el("button",{class:"btn ghost",onclick:()=>{S.step--;saveDraft();renderSurvey();window.scrollTo(0,0);}},"이전");
